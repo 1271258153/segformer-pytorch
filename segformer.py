@@ -78,7 +78,7 @@ class SegFormer_Segmentation(object):
         #---------------------------------------------------#
         self.generate()
         
-        show_config(**self._defaults)
+        show_config(**{k: getattr(self, k) for k in self._defaults})
                     
     #---------------------------------------------------#
     #   获得所有的分类
@@ -90,7 +90,15 @@ class SegFormer_Segmentation(object):
         self.net    = SegFormer(num_classes=self.num_classes, phi=self.phi, pretrained=False)
 
         device      = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.net.load_state_dict(torch.load(self.model_path, map_location=device))
+        #----------------------------------------------------------#
+        #   容错加载：允许部分 key 缺失（如新增模块时旧权重无对应 key）
+        #----------------------------------------------------------#
+        pretrained_dict = torch.load(self.model_path, map_location=device)
+        missing_keys, unexpected_keys = self.net.load_state_dict(pretrained_dict, strict=False)
+        if missing_keys:
+            print('Missing keys (use init values):', missing_keys[:5], '...' if len(missing_keys) > 5 else '')
+        if unexpected_keys:
+            print('Unexpected keys (ignored):', unexpected_keys[:5], '...' if len(unexpected_keys) > 5 else '')
         self.net    = self.net.eval()
         print('{} model, and classes loaded.'.format(self.model_path))
         if not onnx:

@@ -80,7 +80,7 @@ class LossHistory():
 
 class EvalCallback():
     def __init__(self, net, input_shape, num_classes, image_ids, dataset_path, log_dir, cuda, \
-            miou_out_path=".temp_miou_out", eval_flag=True, period=1):
+            miou_out_path=".temp_miou_out", eval_flag=True, period=1, name_classes=None):
         super(EvalCallback, self).__init__()
         
         self.net                = net
@@ -93,6 +93,7 @@ class EvalCallback():
         self.miou_out_path      = miou_out_path
         self.eval_flag          = eval_flag
         self.period             = period
+        self.name_classes       = name_classes
         
         self.image_ids          = [image_id.split()[0] for image_id in image_ids]
         self.mious      = [0]
@@ -170,10 +171,14 @@ class EvalCallback():
                 #   获得预测txt
                 #------------------------------#
                 image       = self.get_miou_png(image)
-                image.save(os.path.join(pred_dir, image_id + ".png"))
+                save_path   = os.path.join(pred_dir, image_id + ".png")
+                save_dir    = os.path.dirname(save_path)
+                if not os.path.exists(save_dir):
+                    os.makedirs(save_dir)
+                image.save(save_path)
                         
             print("Calculate miou.")
-            _, IoUs, _, _ = compute_mIoU(gt_dir, pred_dir, self.image_ids, self.num_classes, None)  # 执行计算mIoU的函数
+            _, IoUs, _, _ = compute_mIoU(gt_dir, pred_dir, self.image_ids, self.num_classes, self.name_classes)  # 执行计算mIoU的函数
             temp_miou = np.nanmean(IoUs) * 100
 
             self.mious.append(temp_miou)

@@ -36,6 +36,54 @@ class ConvModule(nn.Module):
     def fuseforward(self, x):
         return self.act(self.conv(x))
 
+
+class CoordAtt(nn.Module):
+    """
+    Coordinate Attention (CVPR 2021).
+    在通道注意力的基础上引入水平/垂直方向的精确位置信息，
+    使网络能够同时关注通道与空间维度的长距离依赖关系。
+    """
+    def __init__(self, in_channels, reduction=32):
+        super(CoordAtt, self).__init__()
+        # 自适应池化分别沿 H 和 W 方向聚合信息
+        self.x_pool = nn.AdaptiveAvgPool2d((None, 1))   # 沿 W 池化 -> (C, H, 1)
+        self.y_pool = nn.AdaptiveAvgPool2d((1, None))   # 沿 H 池化 -> (C, 1, W)
+
+        mid_channels = max(in_channels // reduction, 8)
+
+        # 共享的 1x1 卷积用于降维并融合两方向信息
+        self.conv1 = nn.Conv2d(in_channels, mid_channels, kernel_size=1, bias=False)
+        self.bn1   = nn.BatchNorm2d(mid_channels)
+        self.act   = nn.SiLU(inplace=True)
+
+        # 分别为 H 方向和 W 方向生成注意力权重
+        self.conv_h = nn.Conv2d(mid_channels, in_channels, kernel_size=1, bias=False)
+        self.conv_w = nn.Conv2d(mid_channels, in_channels, kernel_size=1, bias=False)
+
+    def forward(self, x):
+        identity = x
+        n, c, h, w = x.shape
+
+        # 沿 W 方向池化得到 (N, C, H, 1)；沿 H 方向池化得到 (N, C, 1, W) 后转置为 (N, C, W, 1)
+        x_h = self.x_pool(x)
+        x_w = self.y_pool(x).permute(0, 1, 3, 2)
+
+        # 沿 H 维度拼接两个方向的特征 -> (N, C, H+W, 1)
+        y = torch.cat([x_h, x_w], dim=2)
+        y = self.act(self.bn1(self.conv1(y)))
+
+        # 沿 H 维度拆分回 H 和 W 两个方向
+        x_h, x_w = torch.split(y, [h, w], dim=2)
+        # 将 W 方向还原为 (N, C, 1, W)
+        x_w = x_w.permute(0, 1, 3, 2)
+
+        # 生成两个方向的注意力门控，并利用广播与原特征相乘
+        g_h = torch.sigmoid(self.conv_h(x_h))   # (N, C, H, 1)
+        g_w = torch.sigmoid(self.conv_w(x_w))   # (N, C, 1, W)
+
+        return identity * g_h * g_w
+
+
 class SegFormerHead(nn.Module):
     """
     SegFormer: Simple and Efficient Design for Semantic Segmentation with Transformers
@@ -55,15 +103,18 @@ class SegFormerHead(nn.Module):
             k=1,
         )
 
+        # 在多尺度特征融合后引入 CoordAtt，增强对空间位置与通道信息的联合建模
+        self.coord_att   = CoordAtt(embedding_dim, reduction=32)
+
         self.linear_pred    = nn.Conv2d(embedding_dim, num_classes, kernel_size=1)
         self.dropout        = nn.Dropout2d(dropout_ratio)
-    
+
     def forward(self, inputs):
         c1, c2, c3, c4 = inputs
 
         ############## MLP decoder on C1-C4 ###########
         n, _, h, w = c4.shape
-        
+
         _c4 = self.linear_c4(c4).permute(0,2,1).reshape(n, -1, c4.shape[2], c4.shape[3])
         _c4 = F.interpolate(_c4, size=c1.size()[2:], mode='bilinear', align_corners=False)
 
@@ -76,6 +127,9 @@ class SegFormerHead(nn.Module):
         _c1 = self.linear_c1(c1).permute(0,2,1).reshape(n, -1, c1.shape[2], c1.shape[3])
 
         _c = self.linear_fuse(torch.cat([_c4, _c3, _c2, _c1], dim=1))
+
+        # 融合特征经过坐标注意力，强化空间-通道联合建模
+        _c = self.coord_att(_c)
 
         x = self.dropout(_c)
         x = self.linear_pred(x)

@@ -1,0 +1,57 @@
+CUDNN:
+  BENCHMARK: true
+  DETERMINISTIC: false
+  ENABLED: true
+GPUS: (0,)
+OUTPUT_DIR: 'logs'
+LOG_DIR: 'logs'
+WORKERS: 4
+PRINT_FREQ: 10
+
+DATASET:
+  DATASET: infrared_images
+  ROOT: 'VOCdevkit'
+  TEST_SET: 'VOC2007/ImageSets/Segmentation/test.txt'
+  TRAIN_SET: 'VOC2007/ImageSets/Segmentation/train.txt'
+  NUM_CLASSES: 10
+  NAME_CLASSES: ["_background_", "BL_Device", "CC_Server", "DP_Server", "KDVideo_Device", "KVM_Switcher", "SP_Cloud", "VPN_Gateway", "WEB_Firewall", "YP_Server"]
+  COLOR_LIST: [[0, 0, 0], [220, 20, 60], [30, 144, 255], [50, 205, 50], [255, 165, 0], [148, 0, 211], [0, 206, 209], [255, 215, 0], [255, 105, 180], [128, 128, 128]]
+
+MODEL:
+  NAME: segformer
+  PRETRAINED: "model_data/segformer_b0_weights_voc.pth"
+  PHI: 'b0'
+  INPUT_SHAPE: [640, 640]
+  BACKBONE_PRETRAINED: false
+
+LOSS:
+  DICE_LOSS: false
+  FOCAL_LOSS: false
+  CLS_WEIGHTS: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+TRAIN:
+  IMAGE_SIZE: [640, 640]
+  BATCH_SIZE_PER_GPU: 12
+  BEGIN_EPOCH: 0
+  END_EPOCH: 200
+  OPTIMIZER: adamw
+  LR: 0.0001
+  WD: 0.01
+  MOMENTUM: 0.9
+  FREEZE_EPOCH: 50
+  FREEZE_TRAIN: true
+  FREEZE_BATCH_SIZE: 12
+  UNFREEZE_BATCH_SIZE: 12
+  LR_DECAY: cos
+  FP16: false
+  SAVE_PERIOD: 5
+  SEED: 11
+  EVAL_FLAG: true
+  EVAL_PERIOD: 5
+  CUDA: true
+  DISTRIBUTED: false
+  SYNC_BN: false
+
+TEST:
+  OUTPUT_DIR: 'output'
+  MODEL_FILE: 'logs/best_epoch_weights.pth'

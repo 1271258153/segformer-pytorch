@@ -1,3 +1,4 @@
+import argparse
 import datetime
 import os
 from functools import partial
@@ -7,6 +8,7 @@ import torch
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.optim as optim
+import yaml
 from torch.utils.data import DataLoader
 
 from nets.segformer import SegFormer
@@ -17,6 +19,11 @@ from utils.dataloader import SegmentationDataset, seg_dataset_collate
 from utils.utils import (download_weights, seed_everything, show_config,
                          worker_init_fn)
 from utils.utils_fit import fit_one_epoch
+
+
+def load_config(path):
+    with open(path, 'r') as f:
+        return yaml.safe_load(f)
 
 '''
 训练自己的语义分割模型一定需要注意以下几点：
@@ -44,16 +51,34 @@ from utils.utils_fit import fit_one_epoch
    这些都是经验上，只能靠各位同学多查询资料和自己试试了。
 '''
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="SegFormer training with yaml config")
+    parser.add_argument('--config', type=str, default='',
+                        help='path to yaml config file. if empty, use built-in defaults below.')
+    args = parser.parse_args()
+
+    cfg = load_config(args.config) if args.config else None
+    def _get(section, key, default):
+        if cfg is None:
+            return default
+        # 优先从 section.key 读取，否则回退到顶层 key
+        sec = cfg.get(section)
+        if isinstance(sec, dict) and key in sec:
+            return sec[key]
+        if key in cfg:
+            return cfg[key]
+        return default
+    if cfg is not None:
+        print("Loaded config from %s" % args.config)
     #---------------------------------#
     #   Cuda    是否使用Cuda
     #           没有GPU可以设置成False
     #---------------------------------#
-    Cuda            = True
+    Cuda            = _get('TRAIN', 'CUDA', True)
     #----------------------------------------------#
     #   Seed    用于固定随机种子
     #           使得每次独立训练都可以获得一样的结果
     #----------------------------------------------#
-    seed            = 11
+    seed            = _get('TRAIN', 'SEED', 11)
     #---------------------------------------------------------------------#
     #   distributed     用于指定是否使用单机多卡分布式运行
     #                   终端指令仅支持Ubuntu。CUDA_VISIBLE_DEVICES用于在Ubuntu下指定显卡。
@@ -65,33 +90,33 @@ if __name__ == "__main__":
     #       设置            distributed = True
     #       在终端中输入    CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --nproc_per_node=2 train.py
     #---------------------------------------------------------------------#
-    distributed     = False
+    distributed     = _get('TRAIN', 'DISTRIBUTED', False)
     #---------------------------------------------------------------------#
     #   sync_bn     是否使用sync_bn，DDP模式多卡可用
     #---------------------------------------------------------------------#
-    sync_bn         = False
+    sync_bn         = _get('TRAIN', 'SYNC_BN', False)
     #---------------------------------------------------------------------#
     #   fp16        是否使用混合精度训练
     #               可减少约一半的显存、需要pytorch1.7.1以上
     #---------------------------------------------------------------------#
-    fp16            = False
+    fp16            = _get('TRAIN', 'FP16', False)
     #-----------------------------------------------------#
     #   num_classes     训练自己的数据集必须要修改的
     #                   自己需要的分类个数+1，如2+1
     #-----------------------------------------------------#
-    num_classes     = 21
+    num_classes     = _get('DATASET', 'NUM_CLASSES', 21)
     #-------------------------------------------------------------------#
     #   所使用的的主干网络：
     #   b0、b1、b2、b3、b4、b5
     #-------------------------------------------------------------------#
-    phi             = "b0"
+    phi             = _get('MODEL', 'PHI', "b0")
     #----------------------------------------------------------------------------------------------------------------------------#
     #   pretrained      是否使用主干网络的预训练权重，此处使用的是主干的权重，因此是在模型构建的时候进行加载的。
     #                   如果设置了model_path，则主干的权值无需加载，pretrained的值无意义。
     #                   如果不设置model_path，pretrained = True，此时仅加载主干开始训练。
     #                   如果不设置model_path，pretrained = False，Freeze_Train = Fasle，此时从0开始训练，且没有冻结主干的过程。
     #----------------------------------------------------------------------------------------------------------------------------#
-    pretrained      = False
+    pretrained      = _get('MODEL', 'BACKBONE_PRETRAINED', False)
     #----------------------------------------------------------------------------------------------------------------------------#
     #   权值文件的下载请看README，可以通过网盘下载。模型的 预训练权重 对不同数据集是通用的，因为特征是通用的。
     #   模型的 预训练权重 比较重要的部分是 主干特征提取网络的权值部分，用于进行特征提取。
@@ -110,11 +135,11 @@ if __name__ == "__main__":
     #   一般来讲，网络从0开始的训练效果会很差，因为权值太过随机，特征提取效果不明显，因此非常、非常、非常不建议大家从0开始训练！
     #   如果一定要从0开始，可以了解imagenet数据集，首先训练分类模型，获得网络的主干部分权值，分类模型的 主干部分 和该模型通用，基于此进行训练。
     #----------------------------------------------------------------------------------------------------------------------------#
-    model_path      = "model_data/segformer_b0_weights_voc.pth"
+    model_path      = _get('MODEL', 'PRETRAINED', "model_data/segformer_b0_weights_voc.pth")
     #------------------------------#
     #   输入图片的大小
     #------------------------------#
-    input_shape     = [512, 512]
+    input_shape     = _get('MODEL', 'IMAGE_SIZE', _get('MODEL', 'INPUT_SHAPE', [512, 512]))
     
     #----------------------------------------------------------------------------------------------------------------------------#
     #   训练分为两个阶段，分别是冻结阶段和解冻阶段。设置冻结阶段是为了满足机器性能不足的同学的训练需求。
@@ -156,9 +181,9 @@ if __name__ == "__main__":
     #   Freeze_batch_size   模型冻结训练的batch_size
     #                       (当Freeze_Train=False时失效)
     #------------------------------------------------------------------#
-    Init_Epoch          = 0
-    Freeze_Epoch        = 50
-    Freeze_batch_size   = 16
+    Init_Epoch          = _get('TRAIN', 'BEGIN_EPOCH', _get('TRAIN', 'INIT_EPOCH', 0))
+    Freeze_Epoch        = _get('TRAIN', 'FREEZE_EPOCH', 50)
+    Freeze_batch_size   = _get('TRAIN', 'FREEZE_BATCH_SIZE', _get('TRAIN', 'BATCH_SIZE_PER_GPU', 16))
     #------------------------------------------------------------------#
     #   解冻阶段训练参数
     #   此时模型的主干不被冻结了，特征提取网络会发生改变
@@ -166,13 +191,13 @@ if __name__ == "__main__":
     #   UnFreeze_Epoch          模型总共训练的epoch
     #   Unfreeze_batch_size     模型在解冻后的batch_size
     #------------------------------------------------------------------#
-    UnFreeze_Epoch      = 100
-    Unfreeze_batch_size = 8
+    UnFreeze_Epoch      = _get('TRAIN', 'END_EPOCH', _get('TRAIN', 'UNFREEZE_EPOCH', 100))
+    Unfreeze_batch_size = _get('TRAIN', 'UNFREEZE_BATCH_SIZE', _get('TRAIN', 'BATCH_SIZE_PER_GPU', 8))
     #------------------------------------------------------------------#
     #   Freeze_Train    是否进行冻结训练
     #                   默认先冻结主干训练后解冻训练。
     #------------------------------------------------------------------#
-    Freeze_Train        = True
+    Freeze_Train        = _get('TRAIN', 'FREEZE_TRAIN', True)
 
     #------------------------------------------------------------------#
     #   其它训练参数：学习率、优化器、学习率下降有关
@@ -184,7 +209,7 @@ if __name__ == "__main__":
     #                   Transformer系列不建议使用SGD
     #   Min_lr          模型的最小学习率，默认为最大学习率的0.01
     #------------------------------------------------------------------#
-    Init_lr             = 1e-4
+    Init_lr             = _get('TRAIN', 'LR', 1e-4)
     Min_lr              = Init_lr * 0.01
     #------------------------------------------------------------------#
     #   optimizer_type  使用到的优化器种类，可选的有adam、adamw、sgd
@@ -192,21 +217,21 @@ if __name__ == "__main__":
     #   weight_decay    权值衰减，可防止过拟合
     #                   adam会导致weight_decay错误，使用adam时建议设置为0。
     #------------------------------------------------------------------#
-    optimizer_type      = "adamw"
-    momentum            = 0.9
-    weight_decay        = 1e-2
+    optimizer_type      = _get('TRAIN', 'OPTIMIZER', "adamw")
+    momentum            = _get('TRAIN', 'MOMENTUM', 0.9)
+    weight_decay        = _get('TRAIN', 'WD', 1e-2)
     #------------------------------------------------------------------#
     #   lr_decay_type   使用到的学习率下降方式，可选的有'step'、'cos'
     #------------------------------------------------------------------#
-    lr_decay_type       = 'cos'
+    lr_decay_type       = _get('TRAIN', 'LR_DECAY', 'cos')
     #------------------------------------------------------------------#
     #   save_period     多少个epoch保存一次权值
     #------------------------------------------------------------------#
-    save_period         = 5
+    save_period         = _get('TRAIN', 'SAVE_PERIOD', 5)
     #------------------------------------------------------------------#
     #   save_dir        权值与日志文件保存的文件夹
     #------------------------------------------------------------------#
-    save_dir            = 'logs'
+    save_dir            = _get('OUTPUT', 'OUTPUT_DIR', 'logs')
     #------------------------------------------------------------------#
     #   eval_flag       是否在训练时进行评估，评估对象为验证集
     #   eval_period     代表多少个epoch评估一次，不建议频繁的评估
@@ -215,24 +240,24 @@ if __name__ == "__main__":
     #   （一）此处获得的mAP为验证集的mAP。
     #   （二）此处设置评估参数较为保守，目的是加快评估速度。
     #------------------------------------------------------------------#
-    eval_flag           = True
-    eval_period         = 5
+    eval_flag           = _get('TRAIN', 'EVAL_FLAG', True)
+    eval_period         = _get('TRAIN', 'EVAL_PERIOD', 5)
 
     #------------------------------------------------------------------#
     #   VOCdevkit_path  数据集路径
     #------------------------------------------------------------------#
-    VOCdevkit_path  = 'VOCdevkit'
+    VOCdevkit_path  = _get('DATASET', 'ROOT', 'VOCdevkit')
     #------------------------------------------------------------------#
     #   建议选项：
     #   种类少（几类）时，设置为True
     #   种类多（十几类）时，如果batch_size比较大（10以上），那么设置为True
     #   种类多（十几类）时，如果batch_size比较小（10以下），那么设置为False
     #------------------------------------------------------------------#
-    dice_loss       = False
+    dice_loss       = _get('LOSS', 'DICE_LOSS', False)
     #------------------------------------------------------------------#
     #   是否使用focal loss来防止正负样本不平衡
     #------------------------------------------------------------------#
-    focal_loss      = False
+    focal_loss      = _get('LOSS', 'FOCAL_LOSS', False)
     #------------------------------------------------------------------#
     #   是否给不同种类赋予不同的损失权值，默认是平衡的。
     #   设置的话，注意设置成numpy形式的，长度和num_classes一样。
@@ -240,14 +265,21 @@ if __name__ == "__main__":
     #   num_classes = 3
     #   cls_weights = np.array([1, 2, 3], np.float32)
     #------------------------------------------------------------------#
-    cls_weights     = np.ones([num_classes], np.float32)
+    cls_weights     = np.array(_get('LOSS', 'CLS_WEIGHTS', np.ones([num_classes])), np.float32)
+    #------------------------------------------------------------------#
+    #   name_classes   类别名称列表，用于训练时打印每一类的IoU
+    #------------------------------------------------------------------#
+    name_classes    = _get('DATASET', 'NAME_CLASSES', [
+        "_background_", "BL_Device", "CC_Server", "DP_Server", "KDVideo_Device",
+        "KVM_Switcher", "SP_Cloud", "VPN_Gateway", "WEB_Firewall", "YP_Server"
+    ])
     #------------------------------------------------------------------#
     #   num_workers     用于设置是否使用多线程读取数据，1代表关闭多线程
     #                   开启后会加快数据读取速度，但是会占用更多内存
     #                   keras里开启多线程有些时候速度反而慢了许多
     #                   在IO为瓶颈的时候再开启多线程，即GPU运算速度远大于读取图片的速度。
     #------------------------------------------------------------------#
-    num_workers     = 4
+    num_workers     = _get('WORKERS', 'WORKERS', 4)
 
     seed_everything(seed)
     #------------------------------------------------------#
@@ -354,9 +386,11 @@ if __name__ == "__main__":
     #---------------------------#
     #   读取数据集对应的txt
     #---------------------------#
-    with open(os.path.join(VOCdevkit_path, "VOC2007/ImageSets/Segmentation/train.txt"),"r") as f:
+    train_set_file = _get('DATASET', 'TRAIN_SET', "VOC2007/ImageSets/Segmentation/train.txt")
+    val_set_file   = _get('DATASET', 'TEST_SET',  "VOC2007/ImageSets/Segmentation/val.txt")
+    with open(os.path.join(VOCdevkit_path, train_set_file),"r") as f:
         train_lines = f.readlines()
-    with open(os.path.join(VOCdevkit_path, "VOC2007/ImageSets/Segmentation/val.txt"),"r") as f:
+    with open(os.path.join(VOCdevkit_path, val_set_file),"r") as f:
         val_lines = f.readlines()
     num_train   = len(train_lines)
     num_val     = len(val_lines)
@@ -463,7 +497,7 @@ if __name__ == "__main__":
         #----------------------#
         if local_rank == 0:
             eval_callback   = EvalCallback(model, input_shape, num_classes, val_lines, VOCdevkit_path, log_dir, Cuda, \
-                                            eval_flag=eval_flag, period=eval_period)
+                                            eval_flag=eval_flag, period=eval_period, name_classes=name_classes)
         else:
             eval_callback   = None
         
