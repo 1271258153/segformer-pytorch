@@ -15,3 +15,8 @@ TEST_SET 改为 `VOC2007/ImageSets/Segmentation/test.txt`
 ```bash
 python get_miou.py --config experiments/infrared_images/test.yaml
 ```
+
+### 计算参数量和 FPS 
+```bash
+
+```
