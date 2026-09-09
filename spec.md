@@ -16,7 +16,16 @@ TEST_SET 改为 `VOC2007/ImageSets/Segmentation/test.txt`
 python get_miou.py --config experiments/infrared_images/test.yaml
 ```
 
+### 生成对比图
+```bash
+python -B tools/make_comparison.py \
+    --config experiments/infrared_images/test.yaml
+
+# 只生成(指定张图片)叠加图
+python -B tools/make_comparison.py --input-dir VOCdevkit/VOC2007/JPEGImages/val --pred-dir output/infrared_images/val --output-dir output/overlays  --overlay-only --images 045.jpg
+```
+
 ### 计算参数量和 FPS 
 ```bash
-
+python tools/get_fps_and_pm.py --phi b0 --device cuda
 ```
