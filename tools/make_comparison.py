@@ -11,7 +11,8 @@
         --input-dir VOCdevkit/VOC2007/JPEGImages \
         --pred-dir output/infrared_images/test \
         --output-dir output/overlays \
-        --overlay-only --images image_001 image_002.jpg
+        --overlay-only --color-weight 0.7 --background-depth 0.3 \
+        --images image_001 image_002.jpg
 
 默认读取 get_miou.py 生成的彩色预测图，并将对比图保存到
 output/infrared_images/comparison_images/。
@@ -46,6 +47,24 @@ def label2color(label, color_list):
 
 def overlay(image, color_mask, alpha=0.5):
     return (image * (1.0 - alpha) + color_mask * alpha).astype(np.uint8)
+
+
+def overlay_foreground(
+    image,
+    color_mask,
+    alpha=0.5,
+    background_color=(0, 0, 0),
+    background_depth=0.0,
+):
+    """混合预测前景，并按需压暗背景。"""
+    result = (image * (1.0 - background_depth)).astype(np.uint8)
+    foreground = np.any(
+        color_mask != np.asarray(background_color, dtype=np.uint8), axis=2
+    )
+    result[foreground] = overlay(
+        image[foreground], color_mask[foreground], alpha=alpha
+    )
+    return result
 
 
 def hconcat(images, gap=4, gap_color=(255, 255, 255)):
@@ -103,11 +122,39 @@ def main():
         help="只处理指定图片；可传一个或多个图片 ID/文件名",
     )
     parser.add_argument("--alpha", default=0.5, type=float, help="叠加图中预测 mask 的权重")
+    parser.add_argument(
+        "--color-weight", "--overlay-color-weight",
+        dest="color_weight",
+        default=None,
+        type=float,
+        help=(
+            "仅在 --overlay-only 模式下使用的前景颜色权重（0 到 1）；"
+            "默认使用 --alpha 的值"
+        ),
+    )
+    parser.add_argument(
+        "--background-depth", "--background-darkness",
+        dest="background_depth",
+        default=0.0,
+        type=float,
+        help=(
+            "仅在 --overlay-only 模式下使用的背景压暗程度（0 到 1）；"
+            "0 保持原图，1 为全黑"
+        ),
+    )
     parser.add_argument("--gap", default=4, type=int, help="各子图之间的白色间隔（像素）")
     args = parser.parse_args()
 
     if not 0.0 <= args.alpha <= 1.0:
         parser.error("--alpha 必须在 0 到 1 之间")
+    if args.color_weight is not None and not 0.0 <= args.color_weight <= 1.0:
+        parser.error("--color-weight 必须在 0 到 1 之间")
+    if args.color_weight is not None and not args.overlay_only:
+        parser.error("--color-weight 只能与 --overlay-only 一起使用")
+    if not 0.0 <= args.background_depth <= 1.0:
+        parser.error("--background-depth 必须在 0 到 1 之间")
+    if args.background_depth != 0.0 and not args.overlay_only:
+        parser.error("--background-depth 只能与 --overlay-only 一起使用")
     if args.gap < 0:
         parser.error("--gap 不能小于 0")
 
@@ -162,7 +209,21 @@ def main():
 
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         pred_color = cv2.cvtColor(pred, cv2.COLOR_BGR2RGB)
-        blended = overlay(image_rgb, pred_color, alpha=args.alpha)
+
+        if args.overlay_only:
+            color_weight = (
+                args.alpha if args.color_weight is None else args.color_weight
+            )
+            background_color = color_list[0] if color_list else (0, 0, 0)
+            blended = overlay_foreground(
+                image_rgb,
+                pred_color,
+                alpha=color_weight,
+                background_color=background_color,
+                background_depth=args.background_depth,
+            )
+        else:
+            blended = overlay(image_rgb, pred_color, alpha=args.alpha)
 
         result = blended
         if not args.overlay_only:

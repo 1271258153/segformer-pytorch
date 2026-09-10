@@ -22,7 +22,7 @@ python -B tools/make_comparison.py \
     --config experiments/infrared_images/test.yaml
 
 # 只生成(指定张图片)叠加图
-python -B tools/make_comparison.py --input-dir VOCdevkit/VOC2007/JPEGImages/val --pred-dir output/infrared_images/val --output-dir output/overlays  --overlay-only --images 045.jpg
+python -B tools/make_comparison.py --input-dir VOCdevkit/VOC2007/JPEGImages/val --pred-dir output/infrared_images/val --output-dir output/overlays  --overlay-only --images 045.jpg --color-weight 0.9 --background-depth 0.5
 ```
 
 ### 计算参数量和 FPS 
